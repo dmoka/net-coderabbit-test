@@ -13,53 +13,73 @@ namespace VerticalSlicingArchitecture.Features.Product
         {
             public void AddRoutes(IEndpointRouteBuilder app)
             {
-                app.MapPost("api/products", async (Request command, WarehousingDbContext context, IValidator<Request> validator) =>
+                // This endpoint creates a new product in the system
+                app.MapPost("api/products", async (Request cmd, WarehousingDbContext ctx, IValidator<Request> v) =>
                 {
-                    var validationResult = validator.Validate(command);
-                    if (!validationResult.IsValid)
+                    try
                     {
-                        return Results.BadRequest(new Error("CreateArticle.Validation", validationResult.ToString()));
+                        // Validate the input
+                        var vr = v.Validate(cmd);
+                        if (!vr.IsValid)
+                        {
+                            return Results.BadRequest(new Error("CreateArticle.Validation", vr.ToString()));
+                        }
+
+                        // Create the product object
+                        var p = new Entities.Product
+                        {
+                            Name = cmd.Name,
+                            Description = cmd.Description,
+                            Price = cmd.Price
+                        };
+
+                        // Handle stock level
+                        var slr = StockLevel.New(p.Id, cmd.InitialStock);
+                        if (slr.IsFailure)
+                        {
+                            return Results.BadRequest(slr.Error);
+                        }
+
+                        p.StockLevel = slr.Value;
+
+                        // Save to database
+                        await ctx.Products.AddAsync(p);
+                        await ctx.SaveChangesAsync();
+
+                        return Results.Created($"/api/products/{p.Id}", p.Id);
                     }
-
-                    var product = new Entities.Product
+                    catch (Exception ex)
                     {
-                        Name = command.Name,
-                        Description = command.Description,
-                        Price = command.Price
-                    };
-
-                    var stockLevelResult = StockLevel.New(product.Id, command.InitialStock);
-                    if (stockLevelResult.IsFailure)
-                    {
-                        return Results.BadRequest(stockLevelResult.Error);
+                        // Log the error
+                        Console.WriteLine($"Error: {ex.Message}");
+                        return Results.StatusCode(500);
                     }
-
-                    product.StockLevel = stockLevelResult.Value;
-
-                    await context.Products.AddAsync(product);
-                    await context.SaveChangesAsync();
-
-                    return Results.Created($"/api/products/{product.Id}", product.Id);
                 });
             }
         }
 
+        // This class holds the data for creating a product
         public class Request
         {
-            public string Name { get; set; }
-            public string Description { get; set; }
-            public decimal Price { get; set; }
-            public int InitialStock { get; set; }
+            public string Name { get; set; }  // The name of the product
+            public string Description { get; set; }  // What the product is
+            public decimal Price { get; set; }  // How much it costs
+            public int InitialStock { get; set; }  // How many we have
         }
 
-
+        // This class validates the request
         public class Validator : AbstractValidator<Request>
         {
             public Validator()
             {
+                // Make sure name is not empty
                 RuleFor(c => c.Name).NotEmpty();
+                // Make sure description is not empty
                 RuleFor(c => c.Description).NotEmpty();
+                // Make sure price is positive
                 RuleFor(c => c.Price).GreaterThan(0);
+                // Make sure stock is not negative
+                RuleFor(c => c.InitialStock).GreaterThanOrEqualTo(0);
             }
         }
     }
